@@ -6,7 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import logging # 로깅 추가
-
+from fastapi.staticfiles import StaticFiles # 정적 파일(CSS, JS) 서빙
+from starlette.responses import FileResponse # index.html 서빙
+import os # 파일 경로 확인용
+from google.cloud import storage
+from google.oauth2 import service_account
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -347,10 +351,31 @@ async def suggest_anime(
         suggestions = top_5['title'].tolist()
         logger.info(f"자동완성 결과: {suggestions}")
         return suggestions
+    
+    
     except Exception as e:
          logger.error(f"자동완성 처리 중 오류 발생: {e}", exc_info=True)
          return [] # 오류 시 빈 리스트 반환
 
+static_files_path = os.path.join(os.path.dirname(__file__), "dist", "assets")
+if os.path.exists(static_files_path):
+    app.mount("/assets", StaticFiles(directory=static_files_path), name="assets")
+    logger.info(f"정적 파일 마운트: /assets -> {static_files_path}")
+else:
+    logger.warning(f"경고: 정적 파일 경로를 찾을 수 없습니다: {static_files_path}")
+    logger.warning("React 앱 빌드 후 'dist/assets' 폴더가 FastAPI 폴더 내에 있는지 확인하세요.")
+
+
+    # 2. 모든 다른 경로('/')는 React의 index.html을 반환하도록 설정
+    # (React Router 등을 사용할 경우 필수)
+@app.get("/{full_path:path}")
+async def serve_react_app(full_path: str):
+    index_html_path = os.path.join(os.path.dirname(__file__), "dist", "index.html")
+    if os.path.exists(index_html_path):
+        return FileResponse(index_html_path)
+    else:
+        logger.error(f"오류: 'dist/index.html' 파일을 찾을 수 없습니다: {index_html_path}")
+        raise HTTPException(status_code=404, detail="React 앱 파일을 찾을 수 없습니다.")
 
 # --- 8. 앱 시작 시 모델 로드 ---
 @app.on_event("startup")
