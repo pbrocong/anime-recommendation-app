@@ -1,0 +1,34 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# macOS files
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+
+# Large model files (Git LFS recommended, see note below)
+*.joblib
+
+# React build output (already copied to 'dist')
+my-new-anime-app/dist/
+my-new-anime-app/node_modules/
+my-new-anime-app/.env
+
+# Node modules in root (if any)
+node_modules/
+
+# Log files
+*.log
