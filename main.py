@@ -55,23 +55,67 @@ class RecommendResponse(BaseModel):
 # --- 1. 모델 로드 ---
 models = {}
 
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "downloaded_models")
+
 def load_models():
-    """앱 시작 시 모든 .joblib 파일을 로드합니다."""
+    """앱 시작 시 GCS에서 모델 파일을 다운로드하고 로드합니다."""
     logger.info(" 모델 로드 중...")
+
+    # --- [ GCS 다운로드 로직 (이전과 동일) ] ---
+    BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
+    CREDENTIALS_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if not BUCKET_NAME or not CREDENTIALS_PATH or not os.path.exists(CREDENTIALS_PATH):
+        logger.error(" [치명적 오류] GCS 환경 변수가 잘못 설정되었거나 키 파일이 없습니다.")
+        exit()
+
+    MODEL_FILES = [
+        "cosine_sim_matrix.joblib", "anime_master_df.joblib",
+        "apriori_rules.joblib", "cf_model_data.joblib"
+    ]
+    logger.info(f"모델 저장 경로: {MODEL_DIR}")
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    all_downloads_ok = True
+    for filename in MODEL_FILES:
+        local_path = os.path.join(MODEL_DIR, filename)
+        if not os.path.exists(local_path):
+            logger.info(f"'{filename}' 다운로드 시도...")
+            if not download_blob(BUCKET_NAME, filename, local_path, CREDENTIALS_PATH):
+                if filename != "apriori_rules.joblib":
+                     logger.error(f" [치명적 오류] 필수 모델 '{filename}' 다운로드 실패.")
+                     all_downloads_ok = False # 실패 플래그 설정
+                else:
+                     logger.warning(" apriori_rules.joblib 다운로드 실패.")
+        else:
+            logger.info(f"'{filename}' 로컬 파일 사용.")
+    # ---------------------------
+
+    # --- [ ★★★ 여기가 핵심 수정 부분 ★★★ ] ---
+    # 로컬 경로(MODEL_DIR)에서 모델 로드
+
     try:
-        models['cosine_sim_cbf'] = joblib.load('cosine_sim_matrix.joblib')
-        models['anime_master_df'] = joblib.load('anime_master_df.joblib')
-        # apriori_rules.joblib 파일이 없을 수도 있으므로 예외 처리 추가
-        try:
-            models['apriori_rules'] = joblib.load('apriori_rules.joblib')
-            logger.info(" * [Apriori 규칙 로드 완료]")
-        except FileNotFoundError:
-            logger.warning(" [경고] 'apriori_rules.joblib' 파일을 찾을 수 없습니다. 하이브리드 모드가 비활성화될 수 있습니다.")
-            models['apriori_rules'] = pd.DataFrame() # 빈 DataFrame으로 초기화
+        # 각 joblib.load() 호출 시 os.path.join(MODEL_DIR, ...) 사용
+        cosine_sim_path = os.path.join(MODEL_DIR, 'cosine_sim_matrix.joblib')
+        if not os.path.exists(cosine_sim_path) and not all_downloads_ok: raise FileNotFoundError(cosine_sim_path) # 다운로드 실패 시 에러 발생
+        models['cosine_sim_cbf'] = joblib.load(cosine_sim_path)
+
+        master_df_path = os.path.join(MODEL_DIR, 'anime_master_df.joblib')
+        if not os.path.exists(master_df_path) and not all_downloads_ok: raise FileNotFoundError(master_df_path)
+        models['anime_master_df'] = joblib.load(master_df_path)
+
+        apriori_path = os.path.join(MODEL_DIR, 'apriori_rules.joblib')
+        if os.path.exists(apriori_path):
+             models['apriori_rules'] = joblib.load(apriori_path)
+             logger.info(" * [Apriori 규칙 로드 완료]")
+        else:
+             models['apriori_rules'] = pd.DataFrame()
+             logger.warning(" [경고] Apriori 규칙 파일 없음.")
 
         logger.info(" * [CBF 모델 로드 완료]")
 
-        cf_data = joblib.load('cf_model_data.joblib')
+        cf_data_path = os.path.join(MODEL_DIR, 'cf_model_data.joblib')
+        if not os.path.exists(cf_data_path) and not all_downloads_ok: raise FileNotFoundError(cf_data_path)
+        cf_data = joblib.load(cf_data_path)
         models['cf_model'] = cf_data['model']
         models['cf_id_to_title'] = cf_data['id_to_title']
         models['cf_title_to_id'] = cf_data['title_to_id']
@@ -86,12 +130,12 @@ def load_models():
         logger.info(f" * 모델 로드 완료. (총 {len(models['anime_master_df'])}개 애니 로드)")
 
     except FileNotFoundError as e:
-        logger.error(f" [치명적 오류] 모델 파일('{e.filename}')을 찾을 수 없습니다.")
-        logger.error(" 'database.py'와 'train_cf.py'를 먼저 실행하여 모델 파일을 생성하세요.")
-        exit()
+        # joblib.load 실패 시 (다운로드 실패 포함)
+        logger.error(f" [치명적 오류] 모델 파일 로드 실패: {e.filename}. GCS 다운로드가 성공했는지 확인하세요.")
+        exit() # 로드 실패 시 서버 종료
     except Exception as e:
         logger.error(f" [치명적 오류] 모델 로드 중 예외 발생: {e}", exc_info=True)
-        exit()
+        exit() # 로드 실패 시 서버 종료
 
 
 # --- 2. FastAPI 앱 생성 및 설정 ---
